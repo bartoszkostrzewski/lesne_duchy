@@ -1,27 +1,50 @@
-export type GiftContent = 'spirit' | 'fire' | 'moon' | 'sun' | 'plus';
+export const ALL_SPIRIT_TYPES = [
+  'Zielony', 'Szary', 'Czerwony', 'Niebieski', 'Brązowy', 
+  'Jasnozielony', 'Żółty', 'Fioletowy', 'Jasnofioletowy'
+] as const;
+
+export type SpiritIconType = typeof ALL_SPIRIT_TYPES[number];
+export type TileIconType = string; 
+export type GiftType = string;
 
 export interface Tile {
   id: string;
   color: string;       
-  spiritType: string;  
-  icons: ('spirit' | 'fire' | 'moon' | 'sun')[]; 
-  hasGift: boolean;    
-  crystallizedBy: string | null;
+  spiritType: SpiritIconType; 
+  icons: TileIconType[]; 
+  hasGift: boolean;  
+  crystallizedBy: string | null; 
+}
+
+export interface SecretGift {
+  id: string;
+  type: GiftType; 
 }
 
 export interface Player {
   id: string;
   name: string;
   collectedTiles: Tile[];
-  collectedGiftsCount: number; // Widoczne dla wszystkich
-  secretGifts: GiftContent[];  // Widoczne TYLKO dla tego gracza
-  crystals: number;
-  frozenCrystals: number;
+  collectedGiftsCount: number; 
+  secretGifts: SecretGift[]; 
+  crystals: number;       
+  frozenCrystals: number; 
+  crystalVisual: string;  
+}
+
+export interface PlayerScore {
+  playerId: string;
+  playerName: string;
+  colorPoints: Record<string, number>;
+  naturePoints: { fire: number; sun: number; moon: number };
+  penalties: number;
+  totalScore: number;
 }
 
 export interface GameState {
   forest: (Tile | null)[][];
   players: Player[];
+  giftsPool: SecretGift[]; 
   currentPlayerIndex: number;
   isFirstRound: boolean;
   turnPhase: 'TAKE_TILES' | 'PLACE_CRYSTAL';

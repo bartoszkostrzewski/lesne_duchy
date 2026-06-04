@@ -8,7 +8,7 @@ const ALL_SPIRIT_TYPES = [
 
 type SpiritIconType = typeof ALL_SPIRIT_TYPES[number];
 type TileIconType = string; 
-type GiftType = string;
+type GiftContent = string;
 
 interface Tile {
   id: string;
@@ -19,20 +19,15 @@ interface Tile {
   crystallizedBy: string | null; 
 }
 
-interface SecretGift {
-  id: string;
-  type: GiftType;
-}
-
 interface Player {
   id: string;
   name: string;
   collectedTiles: Tile[];
   collectedGiftsCount: number; 
-  secretGifts: SecretGift[];  
+  secretGifts: GiftContent[];  
   crystals: number;       
   frozenCrystals: number; 
-  crystalVisual: string; 
+  crystalVisual: string;  
 }
 
 interface PlayerScore {
@@ -68,19 +63,25 @@ export default function App() {
     socket.on("connect", () => setPlayerId(socket.id || ""));
     socket.on("gameStateUpdate", (updatedState: GameState) => {
       setGameState(updatedState);
+      
+      // Jeżeli tura przeszła na kogoś innego lub zmieniła się faza, czyścimy lokalny wybór
       const activePlayer = updatedState.players[updatedState.currentPlayerIndex];
       if (activePlayer?.id !== socket.id) {
         setSelectedTiles(updatedState.selectedTilesByCurrentPlayer || []);
       }
     });
-    socket.on("error", (message: string) => alert(message));
+    
+    socket.on("error", (message: string) => {
+      alert(message);
+      setSelectedTiles([]); // Reset zaznaczenia w przypadku błędu (np. próba wzięcia 2 kryształów rywali)
+    });
 
     return () => {
       socket.off("connect");
       socket.off("gameStateUpdate");
       socket.off("error");
     };
-  }, [playerId]);
+  }, []);
 
   const handleJoinGame = () => {
     if (!playerName.trim()) return;
@@ -88,11 +89,9 @@ export default function App() {
     setIsJoined(true);
   };
 
-  // JEDNA WSPÓLNA FUNKCJA DLA ZNAKÓW I ŻYWIOŁÓW (Dokładnie tak jak chciałeś)
   const renderTileIcon = (icon: TileIconType) => {
     const normalized = icon.trim().toLowerCase();
     switch (normalized) {
-      // Duchy jako czyste kwadraciki emoji
       case 'zielony': return "🟩";
       case 'szary': return "⬜";
       case 'czerwony': return "🟥";
@@ -103,7 +102,6 @@ export default function App() {
       case 'fioletowy': return "🟪";
       case 'jasnofioletowy': return "🔮";
       
-      // Żywioły
       case 'fire': case 'ogień': return "🔥";
       case 'sun': case 'słońce': return "☀️";
       case 'moon': case 'księżyc': return "🌙";
@@ -112,9 +110,8 @@ export default function App() {
     }
   };
 
-  // DOKŁADNIE TAKA SAMA STRUKTURA DLA ŻETONÓW W PANELU GRACZA
-  const renderGiftWidget = (gift: SecretGift) => {
-    const normalized = gift.type.trim().toLowerCase();
+  const renderGiftWidget = (giftType: GiftContent) => {
+    const normalized = giftType.trim().toLowerCase();
     switch (normalized) {
       case 'zielony': return "🟩 Żeton Ducha Zielonego";
       case 'szary': return "⬜ Żeton Ducha Szarego";
@@ -126,12 +123,12 @@ export default function App() {
       case 'fioletowy': return "🟪 Żeton Ducha Fioletowego";
       case 'jasnofioletowy': return "🔮 Żeton Ducha Jasnofioletowego";
       
-      case 'fire': case 'ogień': return "🔥 Żeton Żywiołu Ognia";
-      case 'sun': case 'słońce': return "☀️ Żeton Żywiołu Słońca";
-      case 'moon': case 'księżyc': return "🌙 Żeton Żywiołu Księżyca";
-      case 'plus': return "➕ Żeton Plusa (Ochrona)";
+      case 'fire': return "🔥 Żeton Żywiołu Ognia";
+      case 'sun': return "☀️ Żeton Żywiołu Słońca";
+      case 'moon': return "🌙 Żeton Żywiołu Księżyca";
+      case 'plus': return "➕ Żeton Plusa (Ochrona przed stratą kryształu)";
       
-      default: return `🟫 Żeton (${gift.type})`; 
+      default: return `🟫 Żeton (${giftType})`; 
     }
   };
 
@@ -167,8 +164,9 @@ export default function App() {
     if (!tile) return;
 
     if (gameState.turnPhase === 'PLACE_CRYSTAL') {
+      // Można kliknąć pusty kafelek lub SWÓJ własny kryształ, aby go ściągnąć
       if (tile.crystallizedBy && tile.crystallizedBy !== playerId) {
-        alert("Ten kafelek zajął już Twój rywal!");
+        alert("Ten kafelek zajął już Twój rywal! Nie możesz go nadpisać.");
         return;
       }
       socket.emit("placeCrystal", { row: rowIndex, col: colIndex });
@@ -244,9 +242,9 @@ export default function App() {
   return (
     <div style={{ padding: "20px 40px", fontFamily: "sans-serif", backgroundColor: "#f4f7f4", minHeight: "100vh" }}>
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "2px solid #ccc", paddingBottom: "10px" }}>
-        <h2>Zaczarowany Las (Rozbicie na 9 Duchów)</h2>
+        <h2>Zaczarowany Las (9 Duchów + Mechanika Kontry)</h2>
         <div style={{ fontSize: "17px", fontWeight: "bold", color: isMyTurn ? "#2E7D32" : "#C62828" }}>
-          {isMyTurn ? `🟢 TWÓJ RUCH! Faza: ${gameState.turnPhase === 'TAKE_TILES' ? 'Wybór' : 'Kryształ'}` : `Czekasz na: ${gameState.players[gameState.currentPlayerIndex]?.name}`}
+          {isMyTurn ? `🟢 TWÓJ RUCH! Faza: ${gameState.turnPhase === 'TAKE_TILES' ? 'Wybór Kafelków' : 'Rezerwacja Kryształu'}` : `Czekasz na ruch gracza: ${gameState.players[gameState.currentPlayerIndex]?.name}`}
         </div>
       </header>
 
@@ -281,9 +279,9 @@ export default function App() {
       <div style={{ textAlign: "center", marginTop: "20px" }}>
         {isMyTurn && (
           gameState.turnPhase === 'TAKE_TILES' ? (
-            <button onClick={handleConfirmMove} disabled={selectedTiles.length === 0} style={{ padding: "10px 30px", fontWeight: "bold", backgroundColor: "#4CAF50", color: "white", border: "none", borderRadius: "4px", cursor: "pointer" }}>Zatwierdź ruch ✅</button>
+            <button onClick={handleConfirmMove} disabled={selectedTiles.length === 0} style={{ padding: "10px 30px", fontWeight: "bold", backgroundColor: "#4CAF50", color: "white", border: "none", borderRadius: "4px", cursor: "pointer" }}>Zatwierdź wybór kafelków ✅</button>
           ) : (
-            <button onClick={() => socket.emit("placeCrystal", null)} style={{ padding: "10px 25px", backgroundColor: "#f44336", color: "white", border: "none", borderRadius: "4px", cursor: "pointer" }}>Pomiń rezerwację ⏭️</button>
+            <button onClick={() => socket.emit("placeCrystal", null)} style={{ padding: "10px 25px", backgroundColor: "#f44336", color: "white", border: "none", borderRadius: "4px", cursor: "pointer" }}>Pomiń rezerwację kryształu ⏭️</button>
           )
         )}
       </div>
@@ -293,18 +291,18 @@ export default function App() {
         {gameState.players.map((player) => {
           const isMe = player.id === playerId;
           return (
-            <div key={player.id} style={{ background: "white", padding: "20px", borderRadius: "10px", border: "1px solid #ddd" }}>
+            <div key={player.id} style={{ background: "white", padding: "20px", borderRadius: "10px", border: "1px solid #ddd", boxShadow: player.id === gameState.players[gameState.currentPlayerIndex]?.id ? "0 0 10px rgba(76, 175, 80, 0.5)" : "none" }}>
               <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid #eee", paddingBottom: "8px" }}>
                 <strong>{player.name} {isMe && "(Ty)"} — {player.crystalVisual}</strong>
-                <span style={{ fontSize: "13px" }}>Kryształy: {player.crystals} | Stracone: {player.frozenCrystals} | Żetony: {player.collectedGiftsCount}</span>
+                <span style={{ fontSize: "13px" }}>Kryształy w puli: <strong style={{color: "#2E7D32"}}>{player.crystals}</strong> | Zamrożone: {player.frozenCrystals} | Zdobyte Dary: {player.collectedGiftsCount}</span>
               </div>
 
               {/* Sekcja Tajnych Żetonów */}
-              {isMe && player.secretGifts.length > 0 && (
+              {isMe && player.secretGifts && player.secretGifts.length > 0 && (
                 <div style={{ display: "flex", gap: "10px", marginTop: "10px", background: "#fff3e0", padding: "8px", borderRadius: "6px", flexWrap: "wrap" }}>
-                  {player.secretGifts.map(g => (
-                    <span key={g.id} style={{ background: "white", padding: "4px 10px", borderRadius: "4px", fontSize: "12px", border: "1px solid #ffb74d", display: "inline-flex", alignItems: "center" }}>
-                      {renderGiftWidget(g)}
+                  {player.secretGifts.map((giftType, idx) => (
+                    <span key={idx} style={{ background: "white", padding: "4px 10px", borderRadius: "4px", fontSize: "12px", border: "1px solid #ffb74d", display: "inline-flex", alignItems: "center" }}>
+                      {renderGiftWidget(giftType)}
                     </span>
                   ))}
                 </div>
@@ -313,7 +311,7 @@ export default function App() {
               {/* STOSY KAFELKÓW GRACZA */}
               <div style={{ display: "flex", gap: "10px", marginTop: "15px", overflowX: "auto", paddingBottom: "5px" }}>
                 {ALL_SPIRIT_TYPES.map(type => {
-                  const subTiles = player.collectedTiles.filter(t => t.spiritType === type);
+                  const subTiles = player.collectedTiles.filter(t => t.spiritType.toLowerCase() === type.toLowerCase());
                   return (
                     <div key={type} style={{ minWidth: "85px", textAlign: "center", background: "#fdfdfd", padding: "5px", borderRadius: "4px" }}>
                       <div style={{ fontSize: "9px", background: subTiles.length > 0 ? subTiles[0].color : "#eee", color: subTiles.length > 0 ? "white" : "#666", padding: "2px", borderRadius: "3px", fontWeight: "bold" }}>

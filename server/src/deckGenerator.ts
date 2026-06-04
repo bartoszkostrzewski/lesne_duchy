@@ -1,4 +1,4 @@
-import { Tile } from './types';
+import { Tile, SpiritIconType } from './types'; // Dostosuj ścieżkę do swoich typów
 
 function shuffle<T>(array: T[]): T[] {
   const arr = [...array];
@@ -10,7 +10,7 @@ function shuffle<T>(array: T[]): T[] {
 }
 
 export function generateInitialForest(): (Tile | null)[][] {
-  const baseDeck: Omit<Tile, 'id' | 'color' | 'hasGift' | 'crystallizedBy'>[] = [
+  const baseDeck: { spiritType: SpiritIconType; icons: string[] }[] = [
     { spiritType: 'Zielony', icons: ['spirit', 'moon'] },
     { spiritType: 'Zielony', icons: ['spirit', 'spirit'] },
     { spiritType: 'Zielony', icons: ['spirit', 'fire'] },
@@ -69,13 +69,21 @@ export function generateInitialForest(): (Tile | null)[][] {
   };
 
   let idCounter = 1;
-  const fullDeck: Tile[] = baseDeck.map((bTile) => ({
-    ...bTile,
-    id: `tile_${idCounter++}`,
-    color: colorMap[bTile.spiritType] || '#ffffff',
-    hasGift: false,
-    crystallizedBy: null
-  }));
+  const fullDeck: Tile[] = baseDeck.map((bTile) => {
+    // KLUCZOWE: Automatycznie podmieniamy 'spirit' na realną nazwę koloru (małymi literami)
+    const normalizedIcons = bTile.icons.map(icon => 
+      icon.toLowerCase() === 'spirit' ? bTile.spiritType.toLowerCase() : icon.toLowerCase()
+    );
+
+    return {
+      id: `tile_${idCounter++}`,
+      spiritType: bTile.spiritType,
+      color: colorMap[bTile.spiritType] || '#ffffff',
+      icons: normalizedIcons,
+      hasGift: false,
+      crystallizedBy: null
+    };
+  });
 
   const shuffledDeck = shuffle(fullDeck);
 
@@ -88,16 +96,15 @@ export function generateInitialForest(): (Tile | null)[][] {
     }
   }
 
-  // Sztywne pozycje macierzy (Współrzędne podane przez Ciebie: Kolumna x Rząd)
   const giftPositions = [
-    { r: 0, c: 1 },  // 1x0
-    { r: 1, c: 2 },  // 2x1
-    { r: 2, c: 3 },  // 3x2
-    { r: 3, c: 4 },  // 4x2
-    { r: 0, c: 10 }, // 10x0
-    { r: 1, c: 9 },  // 9x1
-    { r: 2, c: 8 },  // 8x2
-    { r: 3, c: 7 }   // 7x3
+    { r: 0, c: 1 },  
+    { r: 1, c: 2 },  
+    { r: 2, c: 3 },  
+    { r: 3, c: 4 },  
+    { r: 0, c: 10 }, 
+    { r: 1, c: 9 },  
+    { r: 2, c: 8 },  
+    { r: 3, c: 7 }   
   ];
 
   giftPositions.forEach(pos => {

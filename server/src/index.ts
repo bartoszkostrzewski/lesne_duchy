@@ -19,8 +19,15 @@ let gameState: GameState = {
   selectedTilesByCurrentPlayer: []
 };
 
-// Pula możliwych nagród ukrytych w żetonach darów
-const GIFT_POOL: GiftContent[] = ['spirit', 'fire', 'moon', 'sun', 'plus'];
+// Pula możliwych nagród ukrytych w żetonach darów dostosowana pod 9 typów duchów (małymi literami)
+const GIFT_POOL: GiftContent[] = [
+  'zielony', 'szary', 'czerwony', 'niebieski', 'brązowy', 
+  'jasnozielony', 'żółty', 'fioletowy', 'jasnofioletowy',
+  'fire', 'moon', 'sun', 'plus'
+];
+
+// Pula unikalnych kryształków dla wchodzących graczy
+const CRYSTAL_VISUALS = ["💎", "🔮", "⭐", "🟢", "🟡", "🔴", "🔵", "❄️"];
 
 function getRandomGift(): GiftContent {
   return GIFT_POOL[Math.floor(Math.random() * GIFT_POOL.length)];
@@ -34,11 +41,13 @@ function sendCensoredState(socketId: string) {
     }
     return {
       ...p,
-      secretGifts: [] // Inny socket -> ukrywamy zawartość żetonów
+      secretGifts: [] // Inny socket -> ukrywamy zawartość żetonów przed rywalami
     };
   });
 
-  socketId ? io.to(socketId).emit('gameStateUpdate', { ...gameState, players: censoredPlayers }) : null;
+  if (socketId) {
+    io.to(socketId).emit('gameStateUpdate', { ...gameState, players: censoredPlayers });
+  }
 }
 
 function broadcastState() {
@@ -56,6 +65,9 @@ io.on('connection', (socket) => {
     }
 
     if (!gameState.players.some(p => p.id === socket.id)) {
+      // Przydzielenie unikalnego kryształka na podstawie kolejności dołączania
+      const crystalVisual = CRYSTAL_VISUALS[gameState.players.length % CRYSTAL_VISUALS.length];
+
       gameState.players.push({
         id: socket.id,
         name: playerName,
@@ -63,7 +75,8 @@ io.on('connection', (socket) => {
         collectedGiftsCount: 0,
         secretGifts: [],
         crystals: 3,
-        frozenCrystals: 0
+        frozenCrystals: 0,
+        crystalVisual: crystalVisual // Przypisanie wizualne do stanu gracza
       });
     }
     broadcastState();
@@ -84,19 +97,19 @@ io.on('connection', (socket) => {
     let requiredCrystalsForThisMove = 0;
 
     selectedTiles.forEach(pos => {
-      const tile = gameState.forest[pos.row][pos.col];
+      const tile = gameState.forest[pos.row]?.[pos.col];
       if (tile && tile.crystallizedBy && tile.crystallizedBy !== activePlayer.id) {
         requiredCrystalsForThisMove += 1;
       }
     });
 
     if (activePlayer.crystals < requiredCrystalsForThisMove) {
-      socket.emit('error', `Brak kryształów!`);
+      socket.emit('error', `Brak kryształów na przejęcie kafelka przeciwnika!`);
       return;
     }
 
     selectedTiles.forEach(pos => {
-      const tile = gameState.forest[pos.row][pos.col];
+      const tile = gameState.forest[pos.row]?.[pos.col];
       if (tile) {
         if (tile.crystallizedBy) {
           if (tile.crystallizedBy !== activePlayer.id) {
@@ -114,7 +127,7 @@ io.on('connection', (socket) => {
         if (tile.hasGift) {
           const reward = getRandomGift();
           activePlayer.secretGifts.push(reward);
-          activePlayer.collectedGiftsCount += 1;
+          activePlayer.collectedGiftsCount = activePlayer.secretGifts.length;
           tile.hasGift = false;
         }
 
@@ -123,6 +136,7 @@ io.on('connection', (socket) => {
       }
     });
 
+    // Zsuwanie lasu po pobraniu kafelków
     for (let r = 0; r < 4; r++) {
       gameState.forest[r] = gameState.forest[r].filter(tile => tile !== null);
     }
@@ -148,7 +162,7 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const tile = gameState.forest[pos.row][pos.col];
+    const tile = gameState.forest[pos.row]?.[pos.col];
     if (!tile) return;
 
     if (tile.crystallizedBy === activePlayer.id) {
