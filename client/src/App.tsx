@@ -59,29 +59,39 @@ export default function App() {
   const [playerName, setPlayerName] = useState<string>("");
   const [isJoined, setIsJoined] = useState<boolean>(false);
 
-  useEffect(() => {
-    socket.on("connect", () => setPlayerId(socket.id || ""));
-    socket.on("gameStateUpdate", (updatedState: GameState) => {
-      setGameState(updatedState);
-      
-      // Jeżeli tura przeszła na kogoś innego lub zmieniła się faza, czyścimy lokalny wybór
-      const activePlayer = updatedState.players[updatedState.currentPlayerIndex];
-      if (activePlayer?.id !== socket.id) {
-        setSelectedTiles(updatedState.selectedTilesByCurrentPlayer || []);
-      }
-    });
+useEffect(() => {
+  socket.on("connect", () => setPlayerId(socket.id || ""));
+  
+  socket.on("gameStateUpdate", (updatedState: GameState) => {
+    setGameState(updatedState);
     
-    socket.on("error", (message: string) => {
-      alert(message);
-      setSelectedTiles([]); // Reset zaznaczenia w przypadku błędu (np. próba wzięcia 2 kryształów rywali)
-    });
+    // Sprawdzamy, czy to aktualnie TWÓJ ruch
+    const activePlayer = updatedState.players[updatedState.currentPlayerIndex];
+    const isItMyTurnNow = activePlayer?.id === socket.id;
 
-    return () => {
-      socket.off("connect");
-      socket.off("gameStateUpdate");
-      socket.off("error");
-    };
-  }, []);
+    if (isItMyTurnNow) {
+      // JEŚLI TO TWÓJ RUCH: 
+      // Synchronizujemy zaznaczenie z tym, co widzi serwer (wyczyści to stare błędy z poprzednich tur)
+      setSelectedTiles(updatedState.selectedTilesByCurrentPlayer || []);
+    } else {
+      // JEŚLI TO RUCH PRZECIWNIKA:
+      // Pokazujemy na żywo, co klika wróg
+      setSelectedTiles(updatedState.selectedTilesByCurrentPlayer || []);
+    }
+  });
+  
+  socket.on("error", (message: string) => {
+    alert(message);
+    // W przypadku błędu bezwzględnie resetujemy lokalny stan zaznaczenia
+    setSelectedTiles([]);
+  });
+
+  return () => {
+    socket.off("connect");
+    socket.off("gameStateUpdate");
+    socket.off("error");
+  };
+}, []);
 
   const handleJoinGame = () => {
     if (!playerName.trim()) return;

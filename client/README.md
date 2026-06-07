@@ -68,7 +68,11 @@ export default defineConfig([
       },
       // other 
       // 
-      npm run dev   
+      npm run dev 
+      
+      git add .
+      git commit -m "Opis zmian, które wprowadziłeś"
+      git push  
     },
   },
 ])

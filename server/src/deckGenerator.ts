@@ -1,4 +1,4 @@
-import { Tile, SpiritIconType } from './types'; // Dostosuj ścieżkę do swoich typów
+import { Tile, SpiritIconType, GiftContent } from './types';
 
 function shuffle<T>(array: T[]): T[] {
   const arr = [...array];
@@ -9,13 +9,12 @@ function shuffle<T>(array: T[]): T[] {
   return arr;
 }
 
-export function generateInitialForest(): (Tile | null)[][] {
+export function generateInitialForest(giftsDeck: GiftContent[]): (Tile | null)[][] {
   const baseDeck: { spiritType: SpiritIconType; icons: string[] }[] = [
     { spiritType: 'Zielony', icons: ['spirit', 'moon'] },
     { spiritType: 'Zielony', icons: ['spirit', 'spirit'] },
     { spiritType: 'Zielony', icons: ['spirit', 'fire'] },
     { spiritType: 'Zielony', icons: ['spirit', 'sun'] },
-    { spiritType: 'Zielony', icons: ['spirit'] },
     { spiritType: 'Szary', icons: ['spirit', 'spirit'] },
     { spiritType: 'Szary', icons: ['spirit', 'spirit'] },
     { spiritType: 'Szary', icons: ['spirit', 'sun'] },
@@ -70,7 +69,6 @@ export function generateInitialForest(): (Tile | null)[][] {
 
   let idCounter = 1;
   const fullDeck: Tile[] = baseDeck.map((bTile) => {
-    // KLUCZOWE: Automatycznie podmieniamy 'spirit' na realną nazwę koloru (małymi literami)
     const normalizedIcons = bTile.icons.map(icon => 
       icon.toLowerCase() === 'spirit' ? bTile.spiritType.toLowerCase() : icon.toLowerCase()
     );
@@ -81,6 +79,7 @@ export function generateInitialForest(): (Tile | null)[][] {
       color: colorMap[bTile.spiritType] || '#ffffff',
       icons: normalizedIcons,
       hasGift: false,
+      tileGift: null,
       crystallizedBy: null
     };
   });
@@ -107,9 +106,15 @@ export function generateInitialForest(): (Tile | null)[][] {
     { r: 3, c: 7 }   
   ];
 
+  const localGifts = [...giftsDeck];
+
   giftPositions.forEach(pos => {
     if (forest[pos.r] && forest[pos.r][pos.c]) {
-      forest[pos.r][pos.c]!.hasGift = true;
+      const tile = forest[pos.r][pos.c];
+      if (tile) {
+        tile.hasGift = true;
+        tile.tileGift = localGifts.pop() || null; 
+      }
     }
   });
 
