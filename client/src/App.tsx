@@ -1,5 +1,10 @@
 import React, { useEffect, useState } from "react";
-import { io, Socket } from "socket.io-client";
+import { io } from "socket.io-client";
+
+// Zastąp adres URL swoim adresem, bez portu :3000 na końcu!
+const socket = io("https://lesne-duchy.onrender.com", {
+  transports: ['websocket', 'polling'] 
+});
 
 const ALL_SPIRIT_TYPES = [
   'Zielony', 'Szary', 'Czerwony', 'Niebieski', 'Brązowy', 

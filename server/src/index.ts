@@ -6,8 +6,15 @@ import { generateInitialForest } from './deckGenerator';
 
 const app = express();
 const httpServer = createServer(app);
+
+// POPRAWKA 1: Dynamiczny CORS akceptujący połączenia chmurowe oraz protokoły WebSocket
 const io = new Server(httpServer, {
-  cors: { origin: "http://localhost:5173", methods: ["GET", "POST"] }
+  cors: { 
+    origin: "*", // W chmurze zezwalamy na połączenia z Twojego hostingu frontendu (np. Vercel)
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  transports: ['websocket', 'polling'] // Wymuszenie stabilnych transportów dla chmury Render
 });
 
 // Pełna, unikalna pula 13 żetonów darów lasu z instrukcji
@@ -208,7 +215,6 @@ io.on('connection', (socket) => {
     const activePlayer = gameState.players[gameState.currentPlayerIndex];
     if (!activePlayer || activePlayer.id !== socket.id || gameState.turnPhase !== 'TAKE_TILES') return;
 
-    // Limit pierwszego ruchu do max 1 kafelka
     if (gameState.isFirstRound && selectedTiles.length > 1) {
       socket.emit('error', `W pierwszym ruchu gry możesz dobrać maksymalnie 1 kafelek!`);
       return;
@@ -264,7 +270,6 @@ io.on('connection', (socket) => {
           activePlayer.secretGifts.push(tile.tileGift);
           activePlayer.collectedGiftsCount = activePlayer.secretGifts.length;
 
-          // Jeśli gracz podnosi plusa mając 0 kryształków, natychmiast dostaje 1 do puli, by móc wykonać ruch
           if (tile.tileGift === 'plus' && activePlayer.crystals === 0) {
             activePlayer.crystals += 1;
           }
@@ -300,7 +305,7 @@ io.on('connection', (socket) => {
         gameState.currentPlayerIndex = (gameState.currentPlayerIndex + 1) % gameState.players.length;
       }
       
-      gameState.turnPhase = 'TAKE_TILES'; // Kontratakowany gracz dostaje prawo do normalnego ruchu (dobór do 2 kafli)
+      gameState.turnPhase = 'TAKE_TILES';
       if (gameState.isFirstRound) gameState.isFirstRound = false;
     } else {
       gameState.turnPhase = 'PLACE_CRYSTAL'; 
@@ -322,7 +327,6 @@ io.on('connection', (socket) => {
     const tile = gameState.forest[pos.row]?.[pos.col];
     if (!tile) return;
 
-    // MECHANIKA PRZEŁOŻENIA: ściągnięcie kryształu ze swojego kafelka nie kończy tury!
     if (tile.crystallizedBy === activePlayer.id) {
       tile.crystallizedBy = null;
       activePlayer.crystals += 1; 
@@ -372,5 +376,6 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = 3000;
-httpServer.listen(PORT, () => console.log(`Serwer gry działa na porcie ${PORT}`));
+// POPRAWKA 2: Wykorzystanie zmiennej środowiskowej PORT dostarczanej automatycznie przez Render.com
+const PORT = process.env.PORT || 3000;
+httpServer.listen(PORT, () => console.log(`Serwer gry działa dynamicznie na porcie ${PORT}`));
