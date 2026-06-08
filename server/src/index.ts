@@ -1,92 +1,89 @@
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import { GameState, GiftContent } from './types';
+import { GameState, Tile, SecretGift, Player, PlayerScore } from './types';
 import { generateInitialForest } from './deckGenerator';
 
 const app = express();
 const httpServer = createServer(app);
 
-// POPRAWKA 1: Dynamiczny CORS akceptujący połączenia chmurowe oraz protokoły WebSocket
 const io = new Server(httpServer, {
   cors: { 
-    origin: "*", // W chmurze zezwalamy na połączenia z Twojego hostingu frontendu (np. Vercel)
+    origin: "*", 
     methods: ["GET", "POST"],
     credentials: true
   },
-  transports: ['websocket', 'polling'] // Wymuszenie stabilnych transportów dla chmury Render
+  transports: ['websocket', 'polling']
 });
-
-// Pełna, unikalna pula 13 żetonów darów lasu z instrukcji
-const FULL_GIFT_POOL: GiftContent[] = [
-  'zielony', 'szary', 'czerwony', 'niebieski', 'brązowy', 
-  'jasnozielony', 'żółty', 'fioletowy', 'jasnofioletowy',
-  'fire', 'moon', 'sun', 'plus'
-];
-
-let gameState: GameState & { giftsDeck: GiftContent[] } = {
-  forest: [],
-  players: [],
-  currentPlayerIndex: 0,
-  isFirstRound: true,
-  turnPhase: 'TAKE_TILES',
-  selectedTilesByCurrentPlayer: [],
-  giftsDeck: []
-};
 
 const CRYSTAL_VISUALS = ["💎", "🔮", "⭐", "🟢", "🟡", "🔴", "🔵", "❄️"];
 
-function initializeGiftsDeck() {
-  const deck = [...FULL_GIFT_POOL];
-  for (let i = deck.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [deck[i], deck[j]] = [deck[j], deck[i]];
-  }
-  gameState.giftsDeck = deck;
+// Rozszerzamy GameState o opcjonalne pola końcowe gry na potrzeby pokojów
+type ExtendedGameState = GameState & {
+  isGameOver?: boolean;
+  scores?: PlayerScore[];
+};
+
+const rooms: Record<string, ExtendedGameState> = {};
+const playerToRoomMap: Record<string, string> = {};
+
+function createInitialRoomState(): ExtendedGameState {
+  return {
+    forest: [],
+    players: [],
+    giftsPool: [],
+    currentPlayerIndex: 0,
+    isFirstRound: true,
+    turnPhase: 'TAKE_TILES',
+    selectedTilesByCurrentPlayer: []
+  };
 }
 
 // Gra kończy się TYLKO I WYŁĄCZNIE wtedy, gdy nie ma więcej kafelków w lesie
-function checkGameOver(): boolean {
-  const isForestEmpty = gameState.forest.every(row => row.length === 0);
+function checkGameOver(room: ExtendedGameState): boolean {
+  const isForestEmpty = room.forest.every(row => row.length === 0);
   if (isForestEmpty) {
-    calculateFinalScores();
+    calculateFinalScores(room);
     return true;
   }
   return false;
 }
 
 // Oficjalne podliczanie punktów na podstawie instrukcji gry "Leśne Duchy"
-function calculateFinalScores() {
+function calculateFinalScores(room: ExtendedGameState) {
   const spiritTypes = ['Zielony', 'Szary', 'Czerwony', 'Niebieski', 'Brązowy', 'Jasnozielony', 'Żółty', 'Fioletowy', 'Jasnofioletowy'];
   const natureTypes = ['fire', 'moon', 'sun'];
 
-  // 1. Przygotowanie struktury danych i zliczenie ikon oraz fizycznych kafelków u każdego gracza
-  const playersData = gameState.players.map(player => {
+  const playersData = room.players.map(player => {
     const spiritCounts: Record<string, number> = {};
     const spiritHasTiles: Record<string, boolean> = {};
-    const natureCounts: Record<string, number> = {};
-    const natureHasTiles: Record<string, boolean> = {};
+    const natureCounts: Record<string, number> = { fire: 0, moon: 0, sun: 0 };
+    const natureHasTiles: Record<string, boolean> = { fire: false, moon: false, sun: false };
 
     spiritTypes.forEach(type => {
       const target = type.toLowerCase();
       let tileIcons = 0;
       player.collectedTiles.forEach(tile => {
-        tileIcons += tile.icons.filter(icon => icon.toLowerCase() === target).length;
+        if (tile && tile.icons) {
+          tileIcons += tile.icons.filter(icon => icon.toLowerCase() === target).length;
+        }
       });
 
       spiritHasTiles[type] = tileIcons > 0;
-      const tokenIcons = player.secretGifts.filter(g => g.toLowerCase() === target).length;
+      const tokenIcons = player.secretGifts.filter(g => g.type.toLowerCase() === target).length;
       spiritCounts[type] = tileIcons + tokenIcons;
     });
 
     natureTypes.forEach(type => {
       let tileIcons = 0;
       player.collectedTiles.forEach(tile => {
-        tileIcons += tile.icons.filter(icon => icon.toLowerCase() === type).length;
+        if (tile && tile.icons) {
+          tileIcons += tile.icons.filter(icon => icon.toLowerCase() === type).length;
+        }
       });
 
       natureHasTiles[type] = tileIcons > 0;
-      const tokenIcons = player.secretGifts.filter(g => g.toLowerCase() === type).length;
+      const tokenIcons = player.secretGifts.filter(g => g.type.toLowerCase() === type).length;
       natureCounts[type] = tileIcons + tokenIcons;
     });
 
@@ -96,15 +93,14 @@ function calculateFinalScores() {
       collectedTilesCount: player.collectedTiles.length,
       spiritCounts,
       spiritHasTiles,
-      natureCounts,
+      natureCounts: natureCounts as { fire: number; sun: number; moon: number },
       natureHasTiles,
       finalSpiritPoints: {} as Record<string, number>,
-      finalNaturePoints: {} as Record<string, number>,
+      finalNaturePoints: { fire: 0, sun: 0, moon: 0 },
       penalties: 0
     };
   });
 
-  // 2. Szukanie maksimów i przyznawanie punktów oraz kar dla DUCHÓW
   spiritTypes.forEach(type => {
     const maxIcons = Math.max(...playersData.map(p => p.spiritCounts[type]));
 
@@ -116,20 +112,20 @@ function calculateFinalScores() {
       }
 
       if (!p.spiritHasTiles[type]) {
-        p.penalties += 3; // Żetony nie chronią przed karą -3 pkt za brak fizycznego kaflowego wizerunku
+        p.penalties += 3; 
       }
     });
   });
 
-  // 3. Szukanie maksimów i przyznawanie punktów oraz kar dla ŻYWIOŁÓW
   natureTypes.forEach(type => {
-    const maxIcons = Math.max(...playersData.map(p => p.natureCounts[type]));
+    const maxIcons = Math.max(...playersData.map(p => p.natureCounts[type as 'fire'|'sun'|'moon']));
 
     playersData.forEach(p => {
-      if (p.natureCounts[type] === maxIcons && maxIcons > 0) {
-        p.finalNaturePoints[type] = p.natureCounts[type];
+      const currentCount = p.natureCounts[type as 'fire'|'sun'|'moon'];
+      if (currentCount === maxIcons && maxIcons > 0) {
+        p.finalNaturePoints[type as 'fire'|'sun'|'moon'] = currentCount;
       } else {
-        p.finalNaturePoints[type] = 0;
+        p.finalNaturePoints[type as 'fire'|'sun'|'moon'] = 0;
       }
 
       if (!p.natureHasTiles[type]) {
@@ -138,8 +134,7 @@ function calculateFinalScores() {
     });
   });
 
-  // 4. Obliczanie ostatecznego wyniku końcowego
-  gameState.scores = playersData.map(p => {
+  room.scores = playersData.map(p => {
     const sumSpirits = Object.values(p.finalSpiritPoints).reduce((a, b) => a + b, 0);
     const sumNature = Object.values(p.finalNaturePoints).reduce((a, b) => a + b, 0);
     const totalScore = sumSpirits + sumNature - p.penalties;
@@ -154,45 +149,68 @@ function calculateFinalScores() {
     };
   });
 
-  // Rozstrzyganie remisów: przy równych punktach wygrywa ten, kto ma MNIEJ fizycznych kafelków
-  gameState.scores.sort((a, b) => {
+  room.scores.sort((a, b) => {
     if (b.totalScore !== a.totalScore) return b.totalScore - a.totalScore;
     const pA = playersData.find(p => p.id === a.playerId);
     const pB = playersData.find(p => p.id === b.playerId);
     return (pA?.collectedTilesCount || 0) - (pB?.collectedTilesCount || 0);
   });
 
-  gameState.isGameOver = true;
+  room.isGameOver = true;
 }
 
-function sendCensoredState(socketId: string) {
-  const censoredPlayers = gameState.players.map(p => {
+function sendCensoredState(roomCode: string, socketId: string) {
+  const room = rooms[roomCode];
+  if (!room) return;
+
+  const censoredPlayers = room.players.map(p => {
     if (p.id === socketId) return p;
     return { ...p, secretGifts: [] };
   });
-  if (socketId) {
-    io.to(socketId).emit('gameStateUpdate', { ...gameState, players: censoredPlayers });
-  }
+
+  io.to(socketId).emit('gameStateUpdate', { ...room, players: censoredPlayers });
 }
 
-function broadcastState() {
-  gameState.players.forEach(p => sendCensoredState(p.id));
+function broadcastRoomState(roomCode: string) {
+  const room = rooms[roomCode];
+  if (!room) return;
+  room.players.forEach(p => sendCensoredState(roomCode, p.id));
 }
 
 io.on('connection', (socket) => {
   console.log(`Połączono: ${socket.id}`);
 
-  socket.on('joinGame', (playerName) => {
-    if (gameState.forest.length === 0) {
-      initializeGiftsDeck();
-      gameState.forest = generateInitialForest(gameState.giftsDeck);
+  socket.on('joinGame', (data: { playerName: string; roomCode?: string } | string) => {
+    let name = '';
+    let code = 'GLOBAL';
+
+    if (typeof data === 'object' && data !== null) {
+      name = data.playerName;
+      code = (data.roomCode || 'GLOBAL').trim().toUpperCase();
+    } else {
+      name = data;
+    }
+    
+    socket.join(code);
+    playerToRoomMap[socket.id] = code;
+
+    if (!rooms[code]) {
+      rooms[code] = createInitialRoomState();
     }
 
-    if (!gameState.players.some(p => p.id === socket.id)) {
-      const crystalVisual = CRYSTAL_VISUALS[gameState.players.length % CRYSTAL_VISUALS.length];
-      gameState.players.push({
+    const room = rooms[code];
+
+    if (room.forest.length === 0) {
+      // Zakładamy, że deckGenerator poprawnie tworzy las na bazie Twoich struktur danych
+      // Przekazujemy pusty array lub generujemy dary wewnętrznie w deckGeneratorze
+      room.forest = generateInitialForest(); 
+    }
+
+    if (!room.players.some(p => p.id === socket.id)) {
+      const crystalVisual = CRYSTAL_VISUALS[room.players.length % CRYSTAL_VISUALS.length];
+      room.players.push({
         id: socket.id,
-        name: playerName,
+        name: name,
         collectedTiles: [],
         collectedGiftsCount: 0,
         secretGifts: [],
@@ -201,21 +219,30 @@ io.on('connection', (socket) => {
         crystalVisual: crystalVisual
       });
     }
-    broadcastState();
+    broadcastRoomState(code);
   });
 
   socket.on('updateLiveSelection', (selectedTiles: { row: number; col: number }[]) => {
-    const activePlayer = gameState.players[gameState.currentPlayerIndex];
+    const code = playerToRoomMap[socket.id];
+    if (!code || !rooms[code]) return;
+    const room = rooms[code];
+
+    const activePlayer = room.players[room.currentPlayerIndex];
     if (!activePlayer || activePlayer.id !== socket.id) return;
-    gameState.selectedTilesByCurrentPlayer = selectedTiles;
-    broadcastState();
+    
+    room.selectedTilesByCurrentPlayer = selectedTiles;
+    broadcastRoomState(code);
   });
 
   socket.on('makeMove', (selectedTiles: { row: number; col: number }[]) => {
-    const activePlayer = gameState.players[gameState.currentPlayerIndex];
-    if (!activePlayer || activePlayer.id !== socket.id || gameState.turnPhase !== 'TAKE_TILES') return;
+    const code = playerToRoomMap[socket.id];
+    if (!code || !rooms[code]) return;
+    const room = rooms[code];
 
-    if (gameState.isFirstRound && selectedTiles.length > 1) {
+    const activePlayer = room.players[room.currentPlayerIndex];
+    if (!activePlayer || activePlayer.id !== socket.id || room.turnPhase !== 'TAKE_TILES') return;
+
+    if (room.isFirstRound && selectedTiles.length > 1) {
       socket.emit('error', `W pierwszym ruchu gry możesz dobrać maksymalnie 1 kafelek!`);
       return;
     }
@@ -224,7 +251,7 @@ io.on('connection', (socket) => {
     let interruptedPlayerId: string | null = null;
 
     selectedTiles.forEach(pos => {
-      const tile = gameState.forest[pos.row]?.[pos.col];
+      const tile = room.forest[pos.row]?.[pos.col];
       if (tile && tile.crystallizedBy && tile.crystallizedBy !== activePlayer.id) {
         opponentCrystalsCount++;
         interruptedPlayerId = tile.crystallizedBy;
@@ -244,11 +271,11 @@ io.on('connection', (socket) => {
     let cutTurnShort = false;
 
     selectedTiles.forEach(pos => {
-      const tile = gameState.forest[pos.row]?.[pos.col];
+      const tile = room.forest[pos.row]?.[pos.col];
       if (tile) {
         if (tile.crystallizedBy) {
           if (tile.crystallizedBy !== activePlayer.id) {
-            const plusTokenIdx = activePlayer.secretGifts.indexOf('plus');
+            const plusTokenIdx = activePlayer.secretGifts.findIndex(g => g.type === 'plus');
             if (plusTokenIdx > -1) {
               activePlayer.secretGifts.splice(plusTokenIdx, 1);
               activePlayer.collectedGiftsCount = activePlayer.secretGifts.length;
@@ -256,7 +283,7 @@ io.on('connection', (socket) => {
               activePlayer.crystals -= 1;
             }
 
-            const owner = gameState.players.find(p => p.id === tile.crystallizedBy);
+            const owner = room.players.find(p => p.id === tile.crystallizedBy);
             if (owner) owner.crystals += 1;
 
             cutTurnShort = true;
@@ -266,31 +293,34 @@ io.on('connection', (socket) => {
           tile.crystallizedBy = null;
         }
 
-        if (tile.hasGift && tile.tileGift) {
-          activePlayer.secretGifts.push(tile.tileGift);
+        // Twoje kafelki mają cechę hasGift. Dary wyciągamy losowo lub przypisujemy jako obiekt SecretGift
+        if (tile.hasGift) {
+          const newGift: SecretGift = {
+            id: `gift-${Math.random().toString(36).substr(2, 9)}`,
+            type: tile.spiritType.toLowerCase() // Przykład mapowania daru na typ ducha kafelka
+          };
+          activePlayer.secretGifts.push(newGift);
           activePlayer.collectedGiftsCount = activePlayer.secretGifts.length;
 
-          if (tile.tileGift === 'plus' && activePlayer.crystals === 0) {
+          if (newGift.type === 'plus' && activePlayer.crystals === 0) {
             activePlayer.crystals += 1;
           }
-
           tile.hasGift = false;
-          tile.tileGift = null;
         }
 
         activePlayer.collectedTiles.push(tile);
-        gameState.forest[pos.row][pos.col] = null;
+        room.forest[pos.row][pos.col] = null;
       }
     });
 
     for (let r = 0; r < 4; r++) {
-      gameState.forest[r] = gameState.forest[r].filter(tile => tile !== null);
+      room.forest[r] = room.forest[r].filter(tile => tile !== null);
     }
 
-    gameState.selectedTilesByCurrentPlayer = [];
+    room.selectedTilesByCurrentPlayer = [];
 
-    if (checkGameOver()) {
-      broadcastState();
+    if (checkGameOver(room)) {
+      broadcastRoomState(code);
       return;
     }
 
@@ -298,84 +328,90 @@ io.on('connection', (socket) => {
       activePlayer.crystals += activePlayer.frozenCrystals;
       activePlayer.frozenCrystals = 0;
 
-      const nextPlayerIdx = gameState.players.findIndex(p => p.id === interruptedPlayerId);
+      const nextPlayerIdx = room.players.findIndex(p => p.id === interruptedPlayerId);
       if (nextPlayerIdx > -1) {
-        gameState.currentPlayerIndex = nextPlayerIdx;
+        room.currentPlayerIndex = nextPlayerIdx;
       } else {
-        gameState.currentPlayerIndex = (gameState.currentPlayerIndex + 1) % gameState.players.length;
+        room.currentPlayerIndex = (room.currentPlayerIndex + 1) % room.players.length;
       }
       
-      gameState.turnPhase = 'TAKE_TILES';
-      if (gameState.isFirstRound) gameState.isFirstRound = false;
+      room.turnPhase = 'TAKE_TILES';
+      if (room.isFirstRound) room.isFirstRound = false;
     } else {
-      gameState.turnPhase = 'PLACE_CRYSTAL'; 
+      room.turnPhase = 'PLACE_CRYSTAL'; 
     }
 
-    broadcastState();
+    broadcastRoomState(code);
   });
 
   socket.on('placeCrystal', (pos: { row: number; col: number } | null) => {
-    const activePlayer = gameState.players[gameState.currentPlayerIndex];
-    if (!activePlayer || activePlayer.id !== socket.id || gameState.turnPhase !== 'PLACE_CRYSTAL') return;
+    const code = playerToRoomMap[socket.id];
+    if (!code || !rooms[code]) return;
+    const room = rooms[code];
+
+    const activePlayer = room.players[room.currentPlayerIndex];
+    if (!activePlayer || activePlayer.id !== socket.id || room.turnPhase !== 'PLACE_CRYSTAL') return;
 
     if (pos === null) {
-      endTurn();
-      broadcastState();
+      endTurn(room);
+      broadcastRoomState(code);
       return;
     }
 
-    const tile = gameState.forest[pos.row]?.[pos.col];
+    const tile = room.forest[pos.row]?.[pos.col];
     if (!tile) return;
 
     if (tile.crystallizedBy === activePlayer.id) {
       tile.crystallizedBy = null;
       activePlayer.crystals += 1; 
-      broadcastState();
+      broadcastRoomState(code);
       return;
     }
 
     if (!tile.crystallizedBy && activePlayer.crystals > 0) {
       tile.crystallizedBy = activePlayer.id;
       activePlayer.crystals -= 1;
-      endTurn(); 
-      broadcastState();
+      endTurn(room); 
+      broadcastRoomState(code);
       return;
     }
   });
 
-  function endTurn() {
-    const activePlayer = gameState.players[gameState.currentPlayerIndex];
+  function endTurn(room: ExtendedGameState) {
+    const activePlayer = room.players[room.currentPlayerIndex];
     if (activePlayer) {
       activePlayer.crystals += activePlayer.frozenCrystals;
       activePlayer.frozenCrystals = 0;
     }
-    if (gameState.isFirstRound) {
-      gameState.isFirstRound = false;
+    if (room.isFirstRound) {
+      room.isFirstRound = false;
     }
-    gameState.selectedTilesByCurrentPlayer = [];
-    gameState.turnPhase = 'TAKE_TILES';
-    gameState.currentPlayerIndex = (gameState.currentPlayerIndex + 1) % gameState.players.length;
+    room.selectedTilesByCurrentPlayer = [];
+    room.turnPhase = 'TAKE_TILES';
+    room.currentPlayerIndex = (room.currentPlayerIndex + 1) % room.players.length;
   }
 
   socket.on('disconnect', () => {
-    gameState.forest.forEach(row => {
-      row.forEach(tile => {
-        if (tile && tile.crystallizedBy === socket.id) tile.crystallizedBy = null;
+    const code = playerToRoomMap[socket.id];
+    if (code && rooms[code]) {
+      const room = rooms[code];
+      room.forest.forEach(row => {
+        row.forEach(tile => {
+          if (tile && tile.crystallizedBy === socket.id) tile.crystallizedBy = null;
+        });
       });
-    });
-    gameState.players = gameState.players.filter(p => p.id !== socket.id);
-    if (gameState.players.length === 0) {
-      gameState.forest = [];
-      gameState.isFirstRound = true;
-      gameState.currentPlayerIndex = 0;
-      gameState.turnPhase = 'TAKE_TILES';
-      gameState.selectedTilesByCurrentPlayer = [];
-      gameState.giftsDeck = [];
+      room.players = room.players.filter(p => p.id !== socket.id);
+      
+      if (room.players.length === 0) {
+        delete rooms[code];
+      } else {
+        broadcastRoomState(code);
+      }
     }
-    broadcastState();
+    delete playerToRoomMap[socket.id];
+    console.log(`Rozłączono: ${socket.id}`);
   });
 });
 
-// POPRAWKA 2: Wykorzystanie zmiennej środowiskowej PORT dostarczanej automatycznie przez Render.com
 const PORT = process.env.PORT || 3000;
 httpServer.listen(PORT, () => console.log(`Serwer gry działa dynamicznie na porcie ${PORT}`));
