@@ -1,10 +1,5 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { io } from "socket.io-client";
-
-// Zastąp adres URL swoim adresem, bez portu :3000 na końcu!
-const socket = io("https://lesne-duchy.onrender.com", {
-  transports: ['websocket', 'polling'] 
-});
 
 const ALL_SPIRIT_TYPES = [
   'Zielony', 'Szary', 'Czerwony', 'Niebieski', 'Brązowy', 
@@ -79,7 +74,10 @@ const DECK_STATS: Record<SpiritIconType, number> = {
   'Jasnofioletowy': 10,
 };
 
-const socket: Socket = io("http://localhost:3000");
+// JEDNA, POPRAWNA KONFIGURACJA SOCKETU DLA PRODUKCJI NA RENDER.COM
+const socket = io("https://lesne-duchy.onrender.com", {
+  transports: ['websocket', 'polling'] 
+});
 
 export default function App() {
   const [gameState, setGameState] = useState<GameState | null>(null);
@@ -405,11 +403,8 @@ export default function App() {
               boxSizing: "border-box"
             }}>
               {gameState.forest.map((row, rIdx) => (
-                // POPRAWKA: Dodano `justifyContent: "center"` do wiersza.
-                // Teraz niezależnie od liczby pozostałych kafelków, cały wiersz jest automatycznie scentrowany!
                 <div key={rIdx} style={{ display: "flex", gap: "0.5vw", width: "100%", justifyContent: "center" }}>
                   {row.map((tile, cIdx) => {
-                    // Kafelki mają stałą szerokość bazującą na maksymalnej pojemności wiersza, dzięki czemu nie rosną.
                     const tileStyleBase = {
                       width: "calc((100% - (11 * 0.5vw)) / 12)",
                       aspectRatio: "3 / 4",
@@ -417,8 +412,6 @@ export default function App() {
                       borderRadius: "6px"
                     };
 
-                    // POPRAWKA: Zwracamy `null` (czyli całkowicie usuwamy pusty element), aby Flexbox mógł
-                    // płynnie i symetrycznie złożyć pozostałe aktywne kafelki do środka rzędu.
                     if (!tile) {
                       return null;
                     }
