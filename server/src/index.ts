@@ -203,7 +203,7 @@ io.on('connection', (socket) => {
     if (room.forest.length === 0) {
       // Zakładamy, że deckGenerator poprawnie tworzy las na bazie Twoich struktur danych
       // Przekazujemy pusty array lub generujemy dary wewnętrznie w deckGeneratorze
-      room.forest = generateInitialForest(); 
+      room.forest = generateInitialForest([]); 
     }
 
     if (!room.players.some(p => p.id === socket.id)) {

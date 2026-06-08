@@ -9,7 +9,10 @@ function shuffle<T>(array: T[]): T[] {
   return arr;
 }
 
-export function generateInitialForest(giftsDeck: GiftContent[]): (Tile | null)[][] {
+export function generateInitialForest(giftsDeck: GiftContent[] = []): (Tile | null)[][] {
+  // Bezpieczna obsługa danych wejściowych
+  const safeGifts = Array.isArray(giftsDeck) ? giftsDeck : [];
+
   const baseDeck: { spiritType: SpiritIconType; icons: string[] }[] = [
     { spiritType: 'Zielony', icons: ['spirit', 'moon'] },
     { spiritType: 'Zielony', icons: ['spirit', 'spirit'] },
@@ -85,7 +88,6 @@ export function generateInitialForest(giftsDeck: GiftContent[]): (Tile | null)[]
   });
 
   const shuffledDeck = shuffle(fullDeck);
-
   const forest: (Tile | null)[][] = [[], [], [], []];
   let deckIndex = 0;
   
@@ -96,17 +98,11 @@ export function generateInitialForest(giftsDeck: GiftContent[]): (Tile | null)[]
   }
 
   const giftPositions = [
-    { r: 0, c: 1 },  
-    { r: 1, c: 2 },  
-    { r: 2, c: 3 },  
-    { r: 3, c: 4 },  
-    { r: 0, c: 10 }, 
-    { r: 1, c: 9 },  
-    { r: 2, c: 8 },  
-    { r: 3, c: 7 }   
+    { r: 0, c: 1 }, { r: 1, c: 2 }, { r: 2, c: 3 }, { r: 3, c: 4 }, 
+    { r: 0, c: 10 }, { r: 1, c: 9 }, { r: 2, c: 8 }, { r: 3, c: 7 } 
   ];
 
-  const localGifts = [...giftsDeck];
+  const localGifts = [...safeGifts];
 
   giftPositions.forEach(pos => {
     if (forest[pos.r] && forest[pos.r][pos.c]) {
