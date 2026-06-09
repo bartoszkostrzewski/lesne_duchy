@@ -8,7 +8,12 @@ const ALL_SPIRIT_TYPES = [
 
 type SpiritIconType = typeof ALL_SPIRIT_TYPES[number];
 type TileIconType = string; 
-type GiftContent = string;
+
+// SecretGift to obiekt z id i type — nie string
+interface SecretGift {
+  id: string;
+  type: string;
+}
 
 interface Tile {
   id: string;
@@ -16,6 +21,7 @@ interface Tile {
   spiritType: SpiritIconType;
   icons: TileIconType[]; 
   hasGift: boolean;  
+  tileGift: SecretGift | null; // Musi być zgodne z typem serwera
   crystallizedBy: string | null; 
 }
 
@@ -24,7 +30,7 @@ interface Player {
   name: string;
   collectedTiles: Tile[];
   collectedGiftsCount: number; 
-  secretGifts: GiftContent[];   
+  secretGifts: SecretGift[];   // Tablica obiektów SecretGift, nie stringów
   crystals: number;        
   frozenCrystals: number; 
   crystalVisual: string;  
@@ -74,7 +80,6 @@ const DECK_STATS: Record<SpiritIconType, number> = {
   'Jasnofioletowy': 10,
 };
 
-// Inicjalizacja socketa
 const socket = io("https://lesne-duchy.onrender.com", {
   transports: ['websocket', 'polling']
 });
@@ -117,7 +122,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (gameState?.players) { // Poprawiono zabezpieczenie
+    if (gameState?.players) {
       const opponents = gameState.players.filter(p => p.id !== playerId);
       if (opponents.length > 0 && !activeOpponentId) {
         setActiveOpponentId(opponents[0].id);
@@ -153,8 +158,9 @@ export default function App() {
     }
   };
 
-  const renderGiftWidget = (giftType: GiftContent) => {
-    const normalized = giftType.trim().toLowerCase();
+  // Przyjmuje obiekt SecretGift, nie string
+  const renderGiftWidget = (gift: SecretGift) => {
+    const normalized = gift.type.trim().toLowerCase();
     switch (normalized) {
       case 'zielony': return "🟩 Żeton Zielonego";
       case 'szary': return "⬜ Żeton Szarego";
@@ -169,7 +175,7 @@ export default function App() {
       case 'sun': return "☀️ Żeton Słońca";
       case 'moon': return "🌙 Żeton Księżyca";
       case 'plus': return "➕ Żeton Plusa";
-      default: return `🎁 Żeton (${giftType})`; 
+      default: return `🎁 Żeton (${gift.type})`; 
     }
   };
 
@@ -437,11 +443,12 @@ export default function App() {
               ))}
             </div>
           </div>
+          {/* Wyświetlanie darów gracza — iterujemy po obiektach SecretGift */}
           {myPlayer?.secretGifts && myPlayer.secretGifts.length > 0 && (
             <div style={{ height: "5vh", width: "100%", display: "flex", gap: "6px", justifyContent: "center", alignItems: "center", background: "#1e293b", borderRadius: "6px", padding: "2px", boxSizing: "border-box" }}>
-              {myPlayer.secretGifts.map((giftType, idx) => (
-                <span key={idx} style={{ background: "#0f172a", padding: "2px 8px", borderRadius: "4px", fontSize: "10px", border: "1px solid #b45309", fontWeight: "bold" }}>
-                  {renderGiftWidget(giftType)}
+              {myPlayer.secretGifts.map((gift) => (
+                <span key={gift.id} style={{ background: "#0f172a", padding: "2px 8px", borderRadius: "4px", fontSize: "10px", border: "1px solid #b45309", fontWeight: "bold" }}>
+                  {renderGiftWidget(gift)}
                 </span>
               ))}
             </div>

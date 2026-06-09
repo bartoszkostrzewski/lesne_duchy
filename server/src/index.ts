@@ -18,7 +18,6 @@ const io = new Server(httpServer, {
 
 const CRYSTAL_VISUALS = ["💎", "🔮", "⭐", "🟢", "🟡", "🔴", "🔵", "❄️"];
 
-// Rozszerzamy GameState o opcjonalne pola końcowe gry na potrzeby pokojów
 type ExtendedGameState = GameState & {
   isGameOver?: boolean;
   scores?: PlayerScore[];
@@ -26,6 +25,12 @@ type ExtendedGameState = GameState & {
 
 const rooms: Record<string, ExtendedGameState> = {};
 const playerToRoomMap: Record<string, string> = {};
+
+// Pula darów dostępna w grze (8 kafelków z darami na starcie)
+function createGiftsPool(): SecretGift[] {
+  const types = ['fire', 'sun', 'moon', 'zielony', 'niebieski', 'czerwony', 'żółty', 'fioletowy'];
+  return types.map((type, i) => ({ id: `gift_${i + 1}`, type }));
+}
 
 function createInitialRoomState(): ExtendedGameState {
   return {
@@ -201,9 +206,8 @@ io.on('connection', (socket) => {
     const room = rooms[code];
 
     if (room.forest.length === 0) {
-      // Zakładamy, że deckGenerator poprawnie tworzy las na bazie Twoich struktur danych
-      // Przekazujemy pusty array lub generujemy dary wewnętrznie w deckGeneratorze
-      room.forest = generateInitialForest([]); 
+      const giftsPool = createGiftsPool();
+      room.forest = generateInitialForest(giftsPool);
     }
 
     if (!room.players.some(p => p.id === socket.id)) {
@@ -275,6 +279,7 @@ io.on('connection', (socket) => {
       if (tile) {
         if (tile.crystallizedBy) {
           if (tile.crystallizedBy !== activePlayer.id) {
+            // Sprawdź czy gracz ma żeton 'plus' — jeśli tak, użyj go zamiast kryształu
             const plusTokenIdx = activePlayer.secretGifts.findIndex(g => g.type === 'plus');
             if (plusTokenIdx > -1) {
               activePlayer.secretGifts.splice(plusTokenIdx, 1);
@@ -293,19 +298,18 @@ io.on('connection', (socket) => {
           tile.crystallizedBy = null;
         }
 
-        // Twoje kafelki mają cechę hasGift. Dary wyciągamy losowo lub przypisujemy jako obiekt SecretGift
-        if (tile.hasGift) {
-          const newGift: SecretGift = {
-            id: `gift-${Math.random().toString(36).substr(2, 9)}`,
-            type: tile.spiritType.toLowerCase() // Przykład mapowania daru na typ ducha kafelka
-          };
-          activePlayer.secretGifts.push(newGift);
+        // Obsługa daru — tileGift to SecretGift | null
+        if (tile.hasGift && tile.tileGift) {
+          activePlayer.secretGifts.push(tile.tileGift);
           activePlayer.collectedGiftsCount = activePlayer.secretGifts.length;
 
-          if (newGift.type === 'plus' && activePlayer.crystals === 0) {
+          // Bonus 'plus': jeśli gracz nie ma kryształów, dostaje 1
+          if (tile.tileGift.type === 'plus' && activePlayer.crystals === 0) {
             activePlayer.crystals += 1;
           }
+
           tile.hasGift = false;
+          tile.tileGift = null;
         }
 
         activePlayer.collectedTiles.push(tile);

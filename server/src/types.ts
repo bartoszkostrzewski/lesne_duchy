@@ -7,18 +7,19 @@ export type SpiritIconType = typeof ALL_SPIRIT_TYPES[number];
 export type TileIconType = string; 
 export type GiftType = string;
 
+export interface SecretGift {
+  id: string;
+  type: GiftType; 
+}
+
 export interface Tile {
   id: string;
   color: string;       
   spiritType: SpiritIconType; 
   icons: TileIconType[]; 
-  hasGift: boolean;  
+  hasGift: boolean;
+  tileGift: SecretGift | null; // Pole wymagane przez serwer przy obsłudze darów
   crystallizedBy: string | null; 
-}
-
-export interface SecretGift {
-  id: string;
-  type: GiftType; 
 }
 
 export interface Player {

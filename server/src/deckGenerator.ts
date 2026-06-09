@@ -1,4 +1,4 @@
-import { Tile, SpiritIconType, GiftContent } from './types';
+import { Tile, SpiritIconType, SecretGift } from './types';
 
 function shuffle<T>(array: T[]): T[] {
   const arr = [...array];
@@ -9,9 +9,8 @@ function shuffle<T>(array: T[]): T[] {
   return arr;
 }
 
-export function generateInitialForest(giftsDeck: GiftContent[] = []): (Tile | null)[][] {
-  // Bezpieczna obsługa danych wejściowych
-  const safeGifts = Array.isArray(giftsDeck) ? giftsDeck : [];
+export function generateInitialForest(giftsDeck: SecretGift[] = []): (Tile | null)[][] {
+  const safeGifts = Array.isArray(giftsDeck) ? [...giftsDeck] : [];
 
   const baseDeck: { spiritType: SpiritIconType; icons: string[] }[] = [
     { spiritType: 'Zielony', icons: ['spirit', 'moon'] },
@@ -102,14 +101,13 @@ export function generateInitialForest(giftsDeck: GiftContent[] = []): (Tile | nu
     { r: 0, c: 10 }, { r: 1, c: 9 }, { r: 2, c: 8 }, { r: 3, c: 7 } 
   ];
 
-  const localGifts = [...safeGifts];
-
   giftPositions.forEach(pos => {
-    if (forest[pos.r] && forest[pos.r][pos.c]) {
-      const tile = forest[pos.r][pos.c];
-      if (tile) {
+    const tile = forest[pos.r]?.[pos.c];
+    if (tile) {
+      const gift = safeGifts.pop();
+      if (gift) {
         tile.hasGift = true;
-        tile.tileGift = localGifts.pop() || null; 
+        tile.tileGift = gift; // SecretGift — poprawny typ
       }
     }
   });
