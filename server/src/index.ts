@@ -23,8 +23,10 @@ type ExtendedGameState = GameState & {
   scores?: PlayerScore[];
 };
 
+// Mapowania dla stabilnych sesji
 const rooms: Record<string, ExtendedGameState> = {};
-const playerToRoomMap: Record<string, string> = {};
+const playerToRoomMap: Record<string, string> = {}; // dynamiczny socket.id -> pokój
+const disconnectTimeouts: Record<string, NodeJS.Timeout> = {}; // p_id -> timeout
 
 function createGiftsPool(): SecretGift[] {
   const types = ['fire', 'sun', 'moon', 'zielony', 'niebieski', 'czerwony', 'żółty', 'fioletowy', 'plus'];
@@ -107,7 +109,6 @@ function calculateFinalScores(room: ExtendedGameState) {
     return { playerId: p.id, playerName: p.name, colorPoints: p.finalSpiritPoints, naturePoints: p.finalNaturePoints, penalties: p.penalties, totalScore };
   });
   
-  // Rozstrzyganie remisów: mniej zebranych kafelków = wyższa pozycja
   room.scores.sort((a, b) => {
     if (b.totalScore !== a.totalScore) return b.totalScore - a.totalScore;
     const pA = playersData.find(p => p.id === a.playerId);
@@ -133,8 +134,6 @@ function endTurn(room: ExtendedGameState) {
     activePlayer.crystals += activePlayer.frozenCrystals;
     activePlayer.frozenCrystals = 0;
   }
-  // Limit "1 kafelek" obowiązuje TYLKO w pierwszym ruchu całej gry (gracz rozpoczynający).
-  // Po zakończeniu pierwszej tury wyłączamy go na zawsze.
   if (room.isFirstTurn) {
     room.isFirstTurn = false;
   }
@@ -143,20 +142,75 @@ function endTurn(room: ExtendedGameState) {
   room.currentPlayerIndex = (room.currentPlayerIndex + 1) % room.players.length;
 }
 
+// Główna logika gniazd sieciowych
 io.on('connection', (socket) => {
+
   socket.on('joinGame', (data) => {
+    // Wsparcie zarówno dla starych stringów, jak i nowych obiektów z persistentPlayerId
     const name = typeof data === 'object' ? data.playerName : data;
     const code = (typeof data === 'object' && data.roomCode ? data.roomCode : 'GLOBAL').toUpperCase();
+    const pId = typeof data === 'object' && data.persistentPlayerId ? data.persistentPlayerId : socket.id;
+
     socket.join(code);
     playerToRoomMap[socket.id] = code;
+
     if (!rooms[code]) {
         rooms[code] = createInitialRoomState();
         rooms[code].forest = generateInitialForest(createGiftsPool());
     }
-    if (!rooms[code].players.some(p => p.id === socket.id)) {
-      rooms[code].players.push({ id: socket.id, name, collectedTiles: [], collectedGiftsCount: 0, secretGifts: [], crystals: 3, frozenCrystals: 0, crystalVisual: CRYSTAL_VISUALS[rooms[code].players.length % CRYSTAL_VISUALS.length] });
+
+    const room = rooms[code];
+
+    // Anulowanie planowanego usunięcia gracza, jeśli powrócił przed upływem limitu czasu
+    if (disconnectTimeouts[pId]) {
+      clearTimeout(disconnectTimeouts[pId]);
+      delete disconnectTimeouts[pId];
     }
+
+    // Sprawdzenie rekonfiguracji sesji (szukamy po dawnym ID socketu lub dedykowanym identyfikatorze)
+    const existingPlayer = room.players.find(p => p.id === pId || (p as any).persistentPlayerId === pId);
+
+    if (existingPlayer) {
+      // Przypisanie kryształów na planszy ze starego id na nowe id socketu
+      const oldSocketId = existingPlayer.id;
+      room.forest.forEach(row => {
+        row.forEach(tile => {
+          if (tile && tile.crystallizedBy === oldSocketId) {
+            tile.crystallizedBy = socket.id;
+          }
+        });
+      });
+
+      // Aktualizacja danych połączenia
+      existingPlayer.id = socket.id;
+    } else {
+      // Dodawanie całkowicie nowego gracza
+      room.players.push({ 
+        id: socket.id, 
+        name, 
+        collectedTiles: [], 
+        collectedGiftsCount: 0, 
+        secretGifts: [], 
+        crystals: 3, 
+        frozenCrystals: 0, 
+        crystalVisual: CRYSTAL_VISUALS[room.players.length % CRYSTAL_VISUALS.length],
+        ...({ persistentPlayerId: pId } as any) // bezpieczne doklejenie stałego ID
+      });
+    }
+
     broadcastRoomState(code);
+  });
+
+  // NOWOŚĆ: Rozgłaszanie zaznaczeń ruchów w czasie rzeczywistym
+  socket.on('updateLiveSelection', (selectedTiles: { row: number; col: number }[]) => {
+    const code = playerToRoomMap[socket.id];
+    if (!code || !rooms[code]) return;
+    
+    // Wysyła współrzędne do wszystkich zalogowanych w pokoju z pominięciem nadawcy
+    socket.to(code).emit('opponentSelectionUpdate', {
+      playerId: socket.id,
+      selectedTiles: selectedTiles
+    });
   });
 
   socket.on('makeMove', (selectedTiles: { row: number; col: number }[]) => {
@@ -166,7 +220,6 @@ io.on('connection', (socket) => {
     const activePlayer = room.players[room.currentPlayerIndex];
     if (!activePlayer || activePlayer.id !== socket.id || room.turnPhase !== 'TAKE_TILES') return;
 
-    // 1. Walidacja ilościowa ruchu
     if (room.isFirstTurn && selectedTiles.length > 1) { 
         socket.emit('error', 'W pierwszym ruchu gry można wziąć tylko 1 kafelek!'); return; 
     }
@@ -174,7 +227,6 @@ io.on('connection', (socket) => {
         socket.emit('error', 'Maksymalnie 2 kafle!'); return; 
     }
 
-    // Pobieramy referencje do rzeczywistych kafelków, które gracz chce wziąć
     const tilesToTake: Tile[] = [];
     for (const pos of selectedTiles) {
       const tile = room.forest[pos.row]?.[pos.col];
@@ -185,7 +237,6 @@ io.on('connection', (socket) => {
       tilesToTake.push(tile);
     }
 
-    // 2. Walidacja sumy symboli duchów (robimy to od razu na stabilnych danych)
     const NATURE_ICONS = ['fire', 'sun', 'moon'];
     let totalSpiritIcons = 0;
 
@@ -200,12 +251,9 @@ io.on('connection', (socket) => {
         return;
     }
 
-    // 3. Bezpieczna walidacja krawędzi (łańcuchowa)
-    // Tworzymy kopię lasu, z której będziemy eliminować kafelki po ich unikalnym ID
     let tempForest = room.forest.map(row => [...row]);
 
     for (const tileToValidate of tilesToTake) {
-      // Szukamy, w którym rzędzie w tempForest znajduje się nasz kafelek
       let foundAndValid = false;
 
       for (let r = 0; r < tempForest.length; r++) {
@@ -213,9 +261,8 @@ io.on('connection', (socket) => {
         const idx = row.findIndex(t => t && t.id === tileToValidate.id);
 
         if (idx !== -1) {
-          // Kafelek znaleziony. Teraz sprawdzamy czy leży na krawędzi swojego wiersza
           if (idx === 0 || idx === row.length - 1) {
-            row.splice(idx, 1); // Usuwamy go z symulacji, odsłaniając kolejny kafelek jako krawędź
+            row.splice(idx, 1);
             foundAndValid = true;
             break;
           }
@@ -228,7 +275,6 @@ io.on('connection', (socket) => {
       }
     }
 
-    // --- SPRAWDZENIE CZY GRACZ MA DOŚĆ KRYSZTAŁÓW NA PRZEJĘCIA ---
     let requiredCrystals = 0;
     tilesToTake.forEach(tile => {
       if (tile.crystallizedBy && tile.crystallizedBy !== activePlayer.id) {
@@ -244,7 +290,6 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // 4. Wykonanie ruchu na prawdziwym stanie gry
     let cutTurnShort = false;
     selectedTiles.forEach(pos => {
       const tile = room.forest[pos.row]?.[pos.col];
@@ -305,7 +350,6 @@ io.on('connection', (socket) => {
     const tile = room.forest[pos.row]?.[pos.col];
     if (!tile) return;
 
-    // Przełożenie własnego kryształu (kliknięcie na swój ściąga go i nie kończy tury)
     if (tile.crystallizedBy === activePlayer.id) {
       tile.crystallizedBy = null;
       activePlayer.crystals += 1; 
@@ -313,7 +357,6 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // Kładzenie na dowolnym wolnym polu (brak walidacji krawędzi)
     if (!tile.crystallizedBy && activePlayer.crystals > 0) {
       tile.crystallizedBy = activePlayer.id;
       activePlayer.crystals -= 1;
@@ -323,17 +366,33 @@ io.on('connection', (socket) => {
     }
   });
 
+  // MODYFIKACJA: Bezpieczne rozłączenie (Dajemy 45 sekund na powrót przed usunięciem)
   socket.on('disconnect', () => {
     const code = playerToRoomMap[socket.id];
     if (code && rooms[code]) {
-        rooms[code].forest.forEach(row => {
-          row.forEach(tile => {
-            if (tile && tile.crystallizedBy === socket.id) tile.crystallizedBy = null;
+      const room = rooms[code];
+      const player = room.players.find(p => p.id === socket.id);
+      
+      if (player) {
+        const pId = (player as any).persistentPlayerId || socket.id;
+
+        // Ustawiamy timer – jeśli gracz nie połączy się w 45 sekund, czyścimy go
+        disconnectTimeouts[pId] = setTimeout(() => {
+          room.forest.forEach(row => {
+            row.forEach(tile => {
+              if (tile && tile.crystallizedBy === socket.id) tile.crystallizedBy = null;
+            });
           });
-        });
-        rooms[code].players = rooms[code].players.filter(p => p.id !== socket.id);
-        if (rooms[code].players.length === 0) delete rooms[code];
-        else broadcastRoomState(code);
+          room.players = room.players.filter(p => p.id !== socket.id);
+          
+          if (room.players.length === 0) {
+            delete rooms[code];
+          } else {
+            broadcastRoomState(code);
+          }
+          delete disconnectTimeouts[pId];
+        }, 45000); // 45 sekund bufora
+      }
     }
     delete playerToRoomMap[socket.id];
   });
