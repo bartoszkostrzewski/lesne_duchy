@@ -83,15 +83,29 @@ const socket = io("https://lesne-duchy.onrender.com", {
   transports: ['websocket', 'polling']
 });
 
+// Funkcja pomocnicza generująca lub pobierająca unikalne, stałe ID urządzenia
+const getOrCreatePersistentPlayerId = () => {
+  let id = localStorage.getItem("lesne_duchy_persistent_id");
+  if (!id) {
+    id = "p_" + Math.random().toString(36).substring(2, 15);
+    localStorage.setItem("lesne_duchy_persistent_id", id);
+  }
+  return id;
+};
+
 export default function App() {
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [selectedTiles, setSelectedTiles] = useState<{ row: number; col: number }[]>([]);
   const [playerId, setPlayerId] = useState<string>("");
+  const [persistentId] = useState<string>(getOrCreatePersistentPlayerId()); // Stałe ID sesji
   const [playerName, setPlayerName] = useState<string>("");
   const [roomCode, setRoomCode] = useState<string>("");
   const [activeRoom, setActiveRoom] = useState<string>("GLOBAL");
   const [isJoined, setIsJoined] = useState<boolean>(false);
   const [activeOpponentId, setActiveOpponentId] = useState<string>("");
+  
+  // NOWOŚĆ: Słownik przechowujący aktualne kliknięcia pozostałych graczy
+  const [opponentSelections, setOpponentSelections] = useState<Record<string, { row: number; col: number }[]>>({});
 
   useEffect(() => {
     document.body.style.margin = "0";
@@ -106,6 +120,15 @@ export default function App() {
     socket.on("gameStateUpdate", (updatedState: GameState) => {
       setGameState(updatedState);
       setSelectedTiles(updatedState.selectedTilesByCurrentPlayer || []);
+      setOpponentSelections({}); // Resetujemy podgląd zaznaczeń przy nowej zmianie stanu gry
+    });
+
+    // NOWOŚĆ: Nasłuchiwanie zmian zaznaczenia od innych graczy
+    socket.on("opponentSelectionUpdate", (data: { playerId: string, selectedTiles: { row: number; col: number }[] }) => {
+      setOpponentSelections(prev => ({
+        ...prev,
+        [data.playerId]: data.selectedTiles
+      }));
     });
     
     socket.on("error", (message: string) => {
@@ -116,6 +139,7 @@ export default function App() {
     return () => {
       socket.off("connect");
       socket.off("gameStateUpdate");
+      socket.off("opponentSelectionUpdate");
       socket.off("error");
     };
   }, []);
@@ -133,7 +157,12 @@ export default function App() {
     if (!playerName.trim()) return;
     const codeToSend = roomCode.trim() ? roomCode.trim().toUpperCase() : 'GLOBAL';
     
-    socket.emit("joinGame", { playerName: playerName.trim(), roomCode: codeToSend });
+    // MODYFIKACJA: Wysyłamy również persistentPlayerId, żeby serwer skojarzył nas po odświeżeniu
+    socket.emit("joinGame", { 
+      playerName: playerName.trim(), 
+      roomCode: codeToSend,
+      persistentPlayerId: persistentId 
+    });
     setActiveRoom(codeToSend);
     setIsJoined(true);
   };
@@ -184,7 +213,6 @@ export default function App() {
     const row = gameState.forest[rowIndex];
     if (!row) return;
 
-    // --- FAZA: KRYSTALIZACJA ---
     if (gameState.turnPhase === 'PLACE_CRYSTAL') {
       const tile = row[colIndex];
       if (!tile) return;
@@ -196,13 +224,11 @@ export default function App() {
       return;
     }
 
-    // --- FAZA: DOBIERANIE KAFLI ---
     const tile = row[colIndex];
     if (!tile) return;
 
     const alreadySelectedIdx = selectedTiles.findIndex(pos => pos.row === rowIndex && pos.col === colIndex);
 
-    // Odznaczanie już wybranego kafla — zawsze dozwolone
     if (alreadySelectedIdx > -1) {
       const newSelection = [...selectedTiles];
       newSelection.splice(alreadySelectedIdx, 1);
@@ -211,7 +237,6 @@ export default function App() {
       return;
     }
 
-    // --- WALIDACJA KRAWĘDZI Z UWZGLĘDNIENIEM ŁAŃCUCHA ---
     const selectedColsInRow = selectedTiles
       .filter(pos => pos.row === rowIndex)
       .map(pos => pos.col);
@@ -228,10 +253,8 @@ export default function App() {
       return;
     }
 
-    // --- WALIDACJA LIMITÓW (ILOŚĆ KAFLI ORAZ SUMA IKON DUCHÓW) ---
     const NATURE_ICONS = ['fire', 'sun', 'moon', 'ogień', 'słońce', 'księżyc'];
 
-    // 1. Sprawdzenie sztywnego limitu ilości kafelków
     if (gameState.isFirstTurn && selectedTiles.length >= 1) {
       alert("W pierwszym ruchu gry możesz wziąć tylko 1 kafelek!");
       return;
@@ -241,7 +264,6 @@ export default function App() {
       return;
     }
 
-    // 2. Obliczenie sumy ikon duchów już zaznaczonych kafelków
     let currentSpiritIconsCount = 0;
     selectedTiles.forEach(pos => {
       const t = gameState.forest[pos.row]?.[pos.col];
@@ -250,17 +272,14 @@ export default function App() {
       }
     });
 
-    // 3. Dodanie ikon z nowo klikniętego kafelka
     const newTileSpiritIconsCount = tile.icons ? tile.icons.filter(icon => !NATURE_ICONS.includes(icon.trim().toLowerCase())).length : 0;
     const totalProjectedIcons = currentSpiritIconsCount + newTileSpiritIconsCount;
 
-    // 4. Blokada wyboru, jeśli suma przekroczy 2
     if (totalProjectedIcons > 2) {
       alert(`Nie możesz zaznaczyć tego kafelka! Łączna liczba symboli duchów przekroczyłaby 2 (wybrano by: ${totalProjectedIcons}).`);
       return;
     }
 
-    // Jeśli wszystko jest ok, zapisujemy stan i wysyłamy na serwer
     const newSelection = [...selectedTiles, { row: rowIndex, col: colIndex }];
     setSelectedTiles(newSelection);
     socket.emit("updateLiveSelection", newSelection);
@@ -269,6 +288,7 @@ export default function App() {
   const handleConfirmMove = () => {
     socket.emit("makeMove", selectedTiles);
     setSelectedTiles([]);
+    setOpponentSelections({}); // Czyścimy lokalnie przy wykonaniu ruchu
   };
 
   if (!isJoined) {
@@ -447,9 +467,25 @@ export default function App() {
                 <div key={rIdx} style={{ display: "flex", gap: "0.5vw", width: "100%", justifyContent: "center" }}>
                   {row.map((tile, cIdx) => {
                     if (!tile) return null;
+                    
+                    // 1. Sprawdzasz, czy to Ty zaznaczyłeś ten kafelek
                     const isSelected = selectedTiles.some(p => p.row === rIdx && p.col === cIdx);
+                    
+                    // 2. NOWOŚĆ: Sprawdzasz, czy jakikolwiek rywal wybrał ten kafelek (szukamy po wpisach w słowniku opponentSelections)
+                    const isSelectedByOpponent = Object.entries(opponentSelections).some(([oppId, tiles]) => 
+                      oppId !== playerId && tiles.some(p => p.row === rIdx && p.col === cIdx)
+                    );
+
                     const crystal = tile.crystallizedBy ? (gameState.players.find(p => p.id === tile.crystallizedBy)?.crystalVisual || "💎") : null;
                     const totalSymbolsCount = DECK_STATS[tile.spiritType] || 0;
+
+                    // 3. Dynamiczne dopasowanie koloru krawędzi
+                    let currentBorder = "1px solid rgba(255,255,255,0.15)";
+                    if (isSelected) {
+                      currentBorder = "3px solid #fbbf24"; // Twój wybór: złoty
+                    } else if (isSelectedByOpponent) {
+                      currentBorder = "3px solid #ef4444"; // Wybór przeciwnika: jaskrawy czerwony
+                    }
 
                     return (
                       <div
@@ -458,9 +494,9 @@ export default function App() {
                         style={{
                           width: "calc((100% - (11 * 0.5vw)) / 12)", aspectRatio: "3 / 4", boxSizing: "border-box", borderRadius: "6px",
                           backgroundColor: tile.color, color: "white", display: "flex", flexDirection: "column", justifyContent: "space-between", padding: "0.3vw", cursor: "pointer", position: "relative", transition: "all 0.1s",
-                          border: isSelected ? "3px solid #fbbf24" : "1px solid rgba(255,255,255,0.15)",
-                          transform: isSelected ? "scale(0.95)" : "none",
-                          zIndex: isSelected ? 10 : 1,
+                          border: currentBorder,
+                          transform: (isSelected || isSelectedByOpponent) ? "scale(0.95)" : "none",
+                          zIndex: (isSelected || isSelectedByOpponent) ? 10 : 1,
                         }}
                       >
                         <div style={{ display: "flex", gap: "2px", justifyContent: "center", background: "rgba(0,0,0,0.2)", padding: "2px", borderRadius: "4px", overflow: "hidden" }}>
