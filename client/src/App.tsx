@@ -9,7 +9,6 @@ const ALL_SPIRIT_TYPES = [
 type SpiritIconType = typeof ALL_SPIRIT_TYPES[number];
 type TileIconType = string; 
 
-// SecretGift to obiekt z id i type — nie string
 interface SecretGift {
   id: string;
   type: string;
@@ -21,7 +20,7 @@ interface Tile {
   spiritType: SpiritIconType;
   icons: TileIconType[]; 
   hasGift: boolean;  
-  tileGift: SecretGift | null; // Musi być zgodne z typem serwera
+  tileGift: SecretGift | null;
   crystallizedBy: string | null; 
 }
 
@@ -30,7 +29,7 @@ interface Player {
   name: string;
   collectedTiles: Tile[];
   collectedGiftsCount: number; 
-  secretGifts: SecretGift[];   // Tablica obiektów SecretGift, nie stringów
+  secretGifts: SecretGift[];   
   crystals: number;        
   frozenCrystals: number; 
   crystalVisual: string;  
@@ -49,7 +48,7 @@ interface GameState {
   forest: (Tile | null)[][]; 
   players: Player[];
   currentPlayerIndex: number;
-  isFirstRound: boolean; 
+  isFirstTurn: boolean; 
   turnPhase: 'TAKE_TILES' | 'PLACE_CRYSTAL';
   selectedTilesByCurrentPlayer: { row: number; col: number }[];
   isGameOver?: boolean;
@@ -158,7 +157,6 @@ export default function App() {
     }
   };
 
-  // Przyjmuje obiekt SecretGift, nie string
   const renderGiftWidget = (gift: SecretGift) => {
     const normalized = gift.type.trim().toLowerCase();
     switch (normalized) {
@@ -181,15 +179,15 @@ export default function App() {
 
   const handleTileClick = (rowIndex: number, colIndex: number) => {
     if (!gameState || gameState.isGameOver) return;
-    if (gameState.players[gameState.currentPlayerIndex]?.id !== playerId) {
-      alert("To nie jest Twój ruch!");
-      return;
-    }
+    if (gameState.players[gameState.currentPlayerIndex]?.id !== playerId) return;
 
-    const tile = gameState.forest[rowIndex]?.[colIndex];
-    if (!tile) return;
+    const row = gameState.forest[rowIndex];
+    if (!row) return;
 
+    // --- FAZA: KRYSTALIZACJA ---
     if (gameState.turnPhase === 'PLACE_CRYSTAL') {
+      const tile = row[colIndex];
+      if (!tile) return;
       if (tile.crystallizedBy && tile.crystallizedBy !== playerId) {
         alert("Ten kafelek zajął już Twój rywal!");
         return;
@@ -198,23 +196,72 @@ export default function App() {
       return;
     }
 
-    const alreadySelectedIdx = selectedTiles.findIndex(pos => pos.row === rowIndex && pos.col === colIndex);
-    let newSelection = [...selectedTiles];
+    // --- FAZA: DOBIERANIE KAFLI ---
+    const tile = row[colIndex];
+    if (!tile) return;
 
+    const alreadySelectedIdx = selectedTiles.findIndex(pos => pos.row === rowIndex && pos.col === colIndex);
+
+    // Odznaczanie już wybranego kafla — zawsze dozwolone
     if (alreadySelectedIdx > -1) {
+      const newSelection = [...selectedTiles];
       newSelection.splice(alreadySelectedIdx, 1);
-    } else {
-      if (gameState.isFirstRound && newSelection.length >= 1) {
-        alert("W pierwszym ruchu gry możesz dobrać maksymalnie 1 kafelek!");
-        return;
-      }
-      if (!gameState.isFirstRound && newSelection.length >= 2) {
-        alert("Możesz zaznaczyć maksymalnie 2 kafelki!");
-        return;
-      }
-      newSelection.push({ row: rowIndex, col: colIndex });
+      setSelectedTiles(newSelection);
+      socket.emit("updateLiveSelection", newSelection);
+      return;
     }
 
+    // --- WALIDACJA KRAWĘDZI Z UWZGLĘDNIENIEM ŁAŃCUCHA ---
+    const selectedColsInRow = selectedTiles
+      .filter(pos => pos.row === rowIndex)
+      .map(pos => pos.col);
+
+    const availableIndices = row
+      .map((t, idx) => (t !== null && !selectedColsInRow.includes(idx)) ? idx : -1)
+      .filter(idx => idx !== -1);
+
+    const firstAvailable = availableIndices[0];
+    const lastAvailable = availableIndices[availableIndices.length - 1];
+
+    if (colIndex !== firstAvailable && colIndex !== lastAvailable) {
+      alert("Możesz dobierać tylko kafelki z krawędzi rzędu!");
+      return;
+    }
+
+    // --- WALIDACJA LIMITÓW (ILOŚĆ KAFLI ORAZ SUMA IKON DUCHÓW) ---
+    const NATURE_ICONS = ['fire', 'sun', 'moon', 'ogień', 'słońce', 'księżyc'];
+
+    // 1. Sprawdzenie sztywnego limitu ilości kafelków
+    if (gameState.isFirstTurn && selectedTiles.length >= 1) {
+      alert("W pierwszym ruchu gry możesz wziąć tylko 1 kafelek!");
+      return;
+    }
+    if (!gameState.isFirstTurn && selectedTiles.length >= 2) {
+      alert("Maksymalnie możesz wybrać 2 kafelki!");
+      return;
+    }
+
+    // 2. Obliczenie sumy ikon duchów już zaznaczonych kafelków
+    let currentSpiritIconsCount = 0;
+    selectedTiles.forEach(pos => {
+      const t = gameState.forest[pos.row]?.[pos.col];
+      if (t && t.icons) {
+        currentSpiritIconsCount += t.icons.filter(icon => !NATURE_ICONS.includes(icon.trim().toLowerCase())).length;
+      }
+    });
+
+    // 3. Dodanie ikon z nowo klikniętego kafelka
+    const newTileSpiritIconsCount = tile.icons ? tile.icons.filter(icon => !NATURE_ICONS.includes(icon.trim().toLowerCase())).length : 0;
+    const totalProjectedIcons = currentSpiritIconsCount + newTileSpiritIconsCount;
+
+    // 4. Blokada wyboru, jeśli suma przekroczy 2
+    if (totalProjectedIcons > 2) {
+      alert(`Nie możesz zaznaczyć tego kafelka! Łączna liczba symboli duchów przekroczyłaby 2 (wybrano by: ${totalProjectedIcons}).`);
+      return;
+    }
+
+    // Jeśli wszystko jest ok, zapisujemy stan i wysyłamy na serwer
+    const newSelection = [...selectedTiles, { row: rowIndex, col: colIndex }];
     setSelectedTiles(newSelection);
     socket.emit("updateLiveSelection", newSelection);
   };
@@ -360,7 +407,7 @@ export default function App() {
         </div>
         <div style={{ fontSize: "12px", background: "#1e293b", padding: "4px 15px", borderRadius: "20px", border: "1px solid #334155", display: "flex", gap: "15px" }}>
           <span>Faza: <strong style={{color: "#fbbf24"}}>{gameState.turnPhase === 'TAKE_TILES' ? 'Dobieranie' : 'Kryształ'}</strong></span>
-          {gameState.isFirstRound && <span style={{ color: "#f87171", fontWeight: "900" }}>RUNDA 1</span>}
+          {gameState.isFirstTurn && <span style={{ color: "#f87171", fontWeight: "900" }}>TYLKO 1 KAFEL</span>}
         </div>
       </header>
       <div style={{ height: "94vh", width: "100%", display: "flex", gap: "10px", boxSizing: "border-box", paddingTop: "10px" }}>
@@ -443,11 +490,33 @@ export default function App() {
               ))}
             </div>
           </div>
-          {/* Wyświetlanie darów gracza — iterujemy po obiektach SecretGift */}
           {myPlayer?.secretGifts && myPlayer.secretGifts.length > 0 && (
-            <div style={{ height: "5vh", width: "100%", display: "flex", gap: "6px", justifyContent: "center", alignItems: "center", background: "#1e293b", borderRadius: "6px", padding: "2px", boxSizing: "border-box" }}>
+            <div style={{ 
+              height: "auto", 
+              minHeight: "40px",
+              width: "100%", 
+              display: "flex", 
+              flexWrap: "wrap", 
+              gap: "6px", 
+              justifyContent: "center", 
+              alignItems: "center", 
+              background: "#1e293b", 
+              borderRadius: "6px", 
+              padding: "8px", 
+              boxSizing: "border-box",
+              marginTop: "5px"
+            }}>
               {myPlayer.secretGifts.map((gift) => (
-                <span key={gift.id} style={{ background: "#0f172a", padding: "2px 8px", borderRadius: "4px", fontSize: "10px", border: "1px solid #b45309", fontWeight: "bold" }}>
+                <span key={gift.id} style={{ 
+                  background: "#0f172a", 
+                  padding: "4px 8px", 
+                  borderRadius: "4px", 
+                  fontSize: "11px", 
+                  border: "1px solid #b45309", 
+                  fontWeight: "bold",
+                  color: "#fbbf24",
+                  whiteSpace: "nowrap"
+                }}>
                   {renderGiftWidget(gift)}
                 </span>
               ))}

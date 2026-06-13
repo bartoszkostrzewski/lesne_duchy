@@ -18,7 +18,7 @@ export interface Tile {
   spiritType: SpiritIconType; 
   icons: TileIconType[]; 
   hasGift: boolean;
-  tileGift: SecretGift | null; // Pole wymagane przez serwer przy obsłudze darów
+  tileGift: SecretGift | null; 
   crystallizedBy: string | null; 
 }
 
@@ -47,7 +47,7 @@ export interface GameState {
   players: Player[];
   giftsPool: SecretGift[]; 
   currentPlayerIndex: number;
-  isFirstRound: boolean;
+  isFirstTurn: boolean;
   turnPhase: 'TAKE_TILES' | 'PLACE_CRYSTAL';
   selectedTilesByCurrentPlayer: { row: number; col: number }[];
 }
